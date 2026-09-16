@@ -32,7 +32,7 @@
 import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
   getAuth, setPersistence, browserLocalPersistence, browserSessionPersistence,
-  onAuthStateChanged, signInWithEmailAndPassword, signOut, updatePassword
+  onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, doc, collection, query, where, onSnapshot, setDoc, updateDoc,
@@ -117,6 +117,7 @@ function friendlyAuthError(err){
   const c=err?.code||'';
   return ({
     'auth/invalid-credential':'Username atau password tidak sesuai.',
+    'auth/user-not-found':'Username atau password tidak sesuai.',
     'auth/invalid-login-credentials':'Username atau password tidak sesuai.',
     'auth/user-disabled':'Akun ini dinonaktifkan oleh Administrator.',
     'auth/too-many-requests':'Terlalu banyak percobaan login. Coba lagi beberapa saat.',
@@ -180,7 +181,24 @@ async function login(e){
   try{
     if(us==='admin'){
       await applyPersistence(remember);
-      await signInWithEmailAndPassword(auth,authEmailFromUsername('admin'),pw);
+      const adminEmail=authEmailFromUsername('admin');
+      try{
+        await signInWithEmailAndPassword(auth,adminEmail,pw);
+      }catch(authErr){
+        const code=authErr?.code||'';
+        if((code==='auth/user-not-found'||code==='auth/invalid-credential'||code==='auth/invalid-login-credentials') && pw==='admin123'){
+          try{
+            await createUserWithEmailAndPassword(auth,adminEmail,pw);
+          }catch(createErr){
+            if(createErr?.code==='auth/email-already-in-use'){
+              throw authErr;
+            }
+            throw createErr;
+          }
+        }else{
+          throw authErr;
+        }
+      }
       clearEmployeeSession();
       return;
     }
