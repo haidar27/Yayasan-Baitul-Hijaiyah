@@ -32,7 +32,7 @@
 import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
   getAuth, setPersistence, browserLocalPersistence, browserSessionPersistence,
-  onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updatePassword
+  onAuthStateChanged, signInWithEmailAndPassword, signOut, updatePassword
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, doc, collection, query, where, onSnapshot, setDoc, updateDoc,
@@ -117,7 +117,6 @@ function friendlyAuthError(err){
   const c=err?.code||'';
   return ({
     'auth/invalid-credential':'Username atau password tidak sesuai.',
-    'auth/user-not-found':'Username atau password tidak sesuai.',
     'auth/invalid-login-credentials':'Username atau password tidak sesuai.',
     'auth/user-disabled':'Akun ini dinonaktifkan oleh Administrator.',
     'auth/too-many-requests':'Terlalu banyak percobaan login. Coba lagi beberapa saat.',
@@ -181,24 +180,7 @@ async function login(e){
   try{
     if(us==='admin'){
       await applyPersistence(remember);
-      const adminEmail=authEmailFromUsername('admin');
-      try{
-        await signInWithEmailAndPassword(auth,adminEmail,pw);
-      }catch(authErr){
-        const code=authErr?.code||'';
-        if((code==='auth/user-not-found'||code==='auth/invalid-credential'||code==='auth/invalid-login-credentials') && pw==='admin123'){
-          try{
-            await createUserWithEmailAndPassword(auth,adminEmail,pw);
-          }catch(createErr){
-            if(createErr?.code==='auth/email-already-in-use'){
-              throw authErr;
-            }
-            throw createErr;
-          }
-        }else{
-          throw authErr;
-        }
-      }
+      await signInWithEmailAndPassword(auth,authEmailFromUsername('admin'),pw);
       clearEmployeeSession();
       return;
     }
@@ -303,6 +285,9 @@ function adminAttendance(){return `${pageHead('ADMINISTRATOR','Data Absensi','Pa
 function renderAttTable(){const d=document.getElementById('attDate')?.value||dateKey(),q=(document.getElementById('attSearch')?.value||'').toLowerCase();pageState.attDate=d;pageState.attSearch=q;let rows=db.attendance.filter(a=>a.date===d);rows=rows.filter(a=>{const u=dirUser(a.userId);return (u?.name||'').toLowerCase().includes(q)||(u?.nik||'').toLowerCase().includes(q)}).sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));const {rows:items,page}=slicePage(rows,'attendance');document.getElementById('attTable').innerHTML=items.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Nama</th><th>Les/Mapel</th><th>Masuk</th><th>Keluar</th><th>Validasi</th><th>Jarak</th><th>Mode</th><th>Aksi</th></tr></thead><tbody>${items.map(a=>{const u=dirUser(a.userId),lesson=db.lessons.find(l=>l.id===a.lessonId);return `<tr><td><strong>${esc(u?.name||'')}</strong><br><small>${esc(u?.nik||'')}</small></td><td>${esc(lesson?.name||'Absensi umum')}</td><td>${a.checkIn?fmtTime(a.checkIn):'—'}</td><td>${a.checkOut?fmtTime(a.checkOut):'—'}</td><td>${a.locationValid===true?'<span class="badge badge-green">Valid</span>':a.locationValid===false?'<span class="badge badge-red">Ditolak</span>':'<span class="badge badge-gray">Manual</span>'}</td><td>${a.distanceMeters!=null?Math.round(a.distanceMeters)+' m':'—'}</td><td>${a.mode==='substitution'?'<span class="badge badge-yellow">Pengganti</span>':'<span class="badge badge-blue">Utama</span>'}</td><td><button class="btn btn-secondary btn-sm" data-edit-att="${a.id}">Edit</button></td></tr>`}).join('')}</tbody></table></div>${pager(rows.length,page,10,'attendance')}`:`<div class="empty">Tidak ada data untuk filter tersebut.</div>`}
 function toLocalInput(iso){if(!iso)return '';const d=new Date(iso),pad=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`}
 function attendanceEditForm(a){const u=dirUser(a.userId),lesson=db.lessons.find(x=>x.id===a.lessonId);openModal(`<div class="modal-head"><div><strong>Edit Riwayat Absensi</strong><div style="color:#64748b;font-size:12px">Admin dapat memperbaiki waktu dan catatan riwayat.</div></div><button class="close" type="button" data-close-modal>×</button></div><form id="editAttForm"><div class="modal-body"><div class="notice">${esc(u?.name||'—')} · ${esc(a.date)} · ${esc(lesson?.name||'Absensi umum')}</div><div style="height:14px"></div><div class="form-grid"><div class="field"><label>Check-in</label><input class="input" type="datetime-local" name="checkIn" value="${toLocalInput(a.checkIn)}"></div><div class="field"><label>Check-out</label><input class="input" type="datetime-local" name="checkOut" value="${toLocalInput(a.checkOut)}"></div><div class="field"><label>Status lokasi</label><select class="select" name="locationValid"><option value="" ${a.locationValid==null?'selected':''}>Manual</option><option value="true" ${a.locationValid===true?'selected':''}>Valid</option><option value="false" ${a.locationValid===false?'selected':''}>Ditolak</option></select></div><div class="field"><label>Jarak (meter)</label><input class="input" type="number" name="distanceMeters" value="${a.distanceMeters??''}"></div><div class="field full"><label>Catatan admin</label><textarea class="textarea" name="adminNote" rows="3">${esc(a.adminNote||'')}</textarea></div></div></div><div class="modal-foot"><button type="button" class="btn btn-white" data-close-modal>Batal</button><button class="btn btn-primary">Simpan perubahan</button></div></form>`);document.getElementById('editAttForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),o=Object.fromEntries(f.entries());try{await updateDoc(doc(dbFs,'attendance',a.id),{checkIn:o.checkIn?new Date(o.checkIn).toISOString():null,checkOut:o.checkOut?new Date(o.checkOut).toISOString():null,locationValid:o.locationValid===''?null:o.locationValid==='true',distanceMeters:o.distanceMeters===''?null:Number(o.distanceMeters),adminNote:o.adminNote||'',updatedAt:nowIso(),updatedBy:session.id});closeModal();toast('Riwayat absensi diperbarui.','ok')}catch(err){toast(err.message||'Gagal memperbarui absensi.','err')}}}
+
+function adminReports(){const active=activeEmployees(),month=dateKey().slice(0,7),arr=db.attendance.filter(a=>a.date.startsWith(month)),present=arr.filter(a=>a.checkIn).length,pending=db.substitutions.filter(s=>s.status==='pending').length;return `${pageHead('ADMINISTRATOR','Laporan','Ringkasan data absensi dan jadwal.')}<div class="grid grid-4"><div class="card stat"><div><div class="stat-label">Guru aktif</div><div class="stat-value">${active.length}</div></div><div class="stat-icon">♙</div></div><div class="card stat"><div><div class="stat-label">Record bulan ini</div><div class="stat-value">${arr.length}</div></div><div class="stat-icon">▤</div></div><div class="card stat"><div><div class="stat-label">Record check-in</div><div class="stat-value positive">${present}</div></div><div class="stat-icon">✓</div></div><div class="card stat"><div><div class="stat-label">Approval pending</div><div class="stat-value warning">${pending}</div></div><div class="stat-icon">↔</div></div></div><div style="height:16px"></div><div class="card"><h3 class="section-title">Export data</h3><p class="section-sub">Unduh seluruh data absensi dalam format CSV.</p><button class="btn btn-primary" id="exportAll">Download CSV Absensi</button></div>`}
+function adminSettings(){return `${pageHead('ADMINISTRATOR','Pengaturan','Pengaturan sistem dan akun Administrator.')}<div class="grid grid-2"><div class="card"><div class="card-head"><div><h3 class="section-title">Ubah Password Administrator</h3><p class="section-sub">Password Administrator dikelola oleh Firebase Authentication.</p></div></div><form id="adminPasswordForm"><div class="field"><label>Password baru *</label><div class="password-wrap"><input class="input" type="password" id="adminNewPassword" autocomplete="new-password" required><button type="button" class="password-icon" data-pw="adminNewPassword" aria-label="Tampilkan password" title="Tampilkan password">◉</button></div></div><div style="height:12px"></div><div class="field"><label>Konfirmasi password baru *</label><div class="password-wrap"><input class="input" type="password" id="adminConfirmPassword" autocomplete="new-password" required><button type="button" class="password-icon" data-pw="adminConfirmPassword" aria-label="Tampilkan password" title="Tampilkan password">◉</button></div></div><div style="height:14px"></div><button class="btn btn-primary" type="submit">Simpan Password</button></form></div><div class="card"><div class="card-head"><div><h3 class="section-title">Reset seluruh sistem</h3><p class="section-sub">Hapus seluruh data karyawan, jadwal, absensi, dan pengajuan pengganti, lalu kembalikan sistem ke kondisi awal.</p></div></div><div class="notice danger"><strong>Peringatan:</strong> tindakan ini tidak dapat dibatalkan. Akun Administrator yang sedang digunakan tetap dipertahankan.</div><div style="height:14px"></div><button class="btn btn-danger" id="resetSystem">Reset Data Sistem</button></div></div>`}
 
 function adminGeofence(){return `${pageHead('ADMINISTRATOR','Pengaturan Geofencing','Tentukan titik lokasi dan radius yang diperbolehkan untuk absensi.','<button class="btn btn-secondary" id="detectAdminLocation">⌖ Deteksi Lokasi Otomatis</button>')}<div class="split"><div class="card"><h3 class="section-title">Zona absensi</h3><p class="section-sub">Lokasi akan digunakan untuk memvalidasi absensi mengajar.</p><div class="form-grid"><div class="field full"><label>Nama lokasi</label><input class="input" id="gfCompany" value="${esc(db.settings.company)}"></div><div class="field"><label>Latitude</label><input class="input" id="gfLat" type="number" step="0.000001" value="${db.settings.lat}"></div><div class="field"><label>Longitude</label><input class="input" id="gfLng" type="number" step="0.000001" value="${db.settings.lng}"></div><div class="field"><label>Radius (meter)</label><input class="input" id="gfRadius" type="number" min="1" max="5000" value="${db.settings.radius}"></div><div class="field"><label>Toleransi keterlambatan (menit)</label><input class="input" id="gfGrace" type="number" min="0" max="120" value="${db.settings.graceMinutes}"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="gfReq" type="checkbox" ${db.settings.requireLocation?'checked':''}> Wajib validasi lokasi saat absensi</label></div></div><button class="btn btn-primary" id="saveGeo">Simpan pengaturan geofence</button></div><div class="card"><div class="notice"><strong>Pengaturan geofencing</strong><div style="margin-top:7px">Peta pihak ketiga tidak digunakan. Sistem tetap dapat melakukan geofencing memakai latitude, longitude, radius, dan GPS perangkat.</div></div><div style="height:16px"></div><div class="status-row"><div><strong>Koordinat pusat</strong><div style="font-size:12px;color:#64748b;margin-top:3px">${Number(db.settings.lat).toFixed(6)}, ${Number(db.settings.lng).toFixed(6)}</div></div><span class="badge badge-blue">Radius ${db.settings.radius} m</span></div><div style="height:16px"></div><div class="notice">Klik <strong>Deteksi Lokasi Otomatis</strong> untuk mengambil posisi perangkat. Setelah itu simpan pengaturan. Guru akan divalidasi berdasarkan jarak GPS ke titik pusat ini.</div></div></div>`}
 
@@ -411,9 +396,11 @@ function setupButtonFeedback(){
       const after={page:currentPage,modal:!!document.getElementById('modalBackdrop')?.classList.contains('show'),main:document.getElementById('main')?.innerHTML||'',toast:document.getElementById('toast')?.className||''};
       const responded=before.page!==after.page||before.modal!==after.modal||before.main!==after.main||after.toast.includes('show');
       if(!responded&&!btn.matches('[data-pw],.close'))toast(`Tombol “${(btn.textContent||'Tindakan').trim()}” belum memberikan respons. Coba lagi atau periksa koneksi.`, 'err');
-    },1400);
+    },6000);
   },true);
 }
+window.addEventListener('error',e=>{const msg=e?.error?.message||e?.message;if(msg)toast('Terjadi kesalahan: '+msg,'err')});
+window.addEventListener('unhandledrejection',e=>{const msg=e?.reason?.message||String(e?.reason||'');if(msg)toast('Terjadi kesalahan: '+msg,'err')});
 setupPwaInstall();setupButtonFeedback();
 // Initial render + Auth observer
 render();
