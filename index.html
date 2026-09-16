@@ -91,7 +91,23 @@ function fmtTime(iso){return new Intl.DateTimeFormat('id-ID',{hour:'2-digit',min
 function fmtTimeShort(iso){return new Intl.DateTimeFormat('id-ID',{hour:'2-digit',minute:'2-digit'}).format(new Date(iso))}
 function dayName(d=new Date()){return DAYS.find(x=>x[0]===String(d.getDay()))?.[1]||''}
 function minutesFromTime(s){if(!s)return 0;const [h,m]=s.split(':').map(Number);return h*60+m}
-function toast(msg,type=''){const el=document.getElementById('toast')||createToast();el.textContent=msg;el.className='toast show '+type;clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.className='toast',3200)}
+function toast(msg,type=''){const el=document.getElementById('toast')||createToast();el.textContent=msg;el.className='toast show '+type;clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.className='toast',3200)}function firebaseFunctionError(err, fallback='Operasi Firebase gagal.'){
+  const code=String(err?.code||'').replace(/^functions\//,'');
+  const message=String(err?.message||'').trim();
+  const details=err?.details;
+  if(code==='already-exists') return message||'Data tersebut sudah digunakan.';
+  if(code==='invalid-argument') return message||'Data yang dimasukkan tidak valid.';
+  if(code==='permission-denied') return message||'Anda tidak memiliki izin untuk melakukan tindakan ini.';
+  if(code==='unauthenticated') return 'Sesi login sudah tidak valid. Silakan login kembali.';
+  if(code==='failed-precondition') return message||'Konfigurasi Firebase belum memenuhi syarat.';
+  if(code==='not-found') return 'Cloud Function belum ditemukan. Pastikan adminCreateEmployee sudah di-deploy ke region asia-southeast2.';
+  if(code==='internal'){
+    if(message && message.toLowerCase()!=='internal') return message;
+    return 'Cloud Function adminCreateEmployee mengalami error internal. Buka Firebase Console → Functions → Logs untuk melihat detail error.';
+  }
+  if(details && typeof details==='string') return details;
+  return message||fallback;
+}
 function createToast(){const el=document.createElement('div');el.id='toast';el.className='toast';document.body.appendChild(el);return el}
 function systemConfirm(title,message,okText='Ya',cancelText='Batal',type='warning'){return new Promise(resolve=>{openModal(`<div class="modal-head"><div><strong>${esc(title)}</strong><div style="color:#64748b;font-size:12px">Konfirmasi tindakan</div></div><button class="close" id="sysClose">×</button></div><div class="modal-body"><div style="display:flex;gap:14px;align-items:flex-start"><div class="system-icon">${type==='danger'?'!':'?'}</div><div style="line-height:1.6;color:#475569;font-size:13px">${message}</div></div></div><div class="modal-foot"><button type="button" class="btn btn-white" id="sysCancel">${esc(cancelText)}</button><button type="button" class="btn ${type==='danger'?'btn-danger':'btn-primary'}" id="sysOk">${esc(okText)}</button></div>`);const finish=v=>{closeModal();resolve(v)};document.getElementById('sysCancel').onclick=()=>finish(false);document.getElementById('sysClose').onclick=()=>finish(false);document.getElementById('sysOk').onclick=()=>finish(true)})}
 function openModal(html){let b=document.getElementById('modalBackdrop');if(!b){b=document.createElement('div');b.id='modalBackdrop';b.className='modal-backdrop';b.innerHTML='<div class="modal" id="modalBox"></div>';document.body.appendChild(b);b.addEventListener('click',e=>{if(e.target===b)closeModal()})}document.getElementById('modalBox').innerHTML=html;b.classList.add('show')}
@@ -205,7 +221,7 @@ async function saveEmployee(e,id){e.preventDefault();const f=new FormData(e.targ
       toast('Data karyawan diperbarui.','ok');
     }
     closeModal();
-  }catch(err){toast(err?.message||'Gagal menyimpan karyawan.','err')}
+  }catch(err){console.error('saveEmployee error:',err);toast(firebaseFunctionError(err,'Gagal menyimpan karyawan.'),'err')}
 }
 
 function adminLessons(){const items=db.lessons.slice().sort((a,b)=>a.name.localeCompare(b.name,'id'));return `${pageHead('ADMINISTRATOR','Jadwal Mengajar','Buat les/mapel dan atur jadwal guru dalam seminggu.','<button class="btn btn-primary" id="addLesson">+ Tambah Les / Mapel</button>')}<div class="card"><div class="card-head"><div><h3 class="section-title">Daftar les / mapel</h3><p class="section-sub">Total ${items.length} jadwal mapel.</p></div><input class="input search" id="lessonSearch" value="${esc(pageState.lessonSearch||'')}" placeholder="Cari mapel, guru, kelas..."></div><div id="lessonTable"></div></div>`}
