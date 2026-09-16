@@ -1,6 +1,5 @@
-const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
-const { logger } = require('firebase-functions');
 const admin = require('firebase-admin');
 
 admin.initializeApp();
@@ -15,40 +14,12 @@ const DEFAULT_SETTINGS = {
 };
 
 async function requireAdmin(request) {
-  if (!request.auth) {
-    throw new HttpsError('unauthenticated', 'Anda harus login terlebih dahulu.');
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Anda harus login.');
+  if (request.auth.token.admin === true) return true;
+  const snap = await db.doc(`users/${request.auth.uid}`).get();
+  if (!snap.exists || snap.data().role !== 'admin' || snap.data().active !== true) {
+    throw new HttpsError('permission-denied', 'Hanya Administrator yang boleh melakukan tindakan ini.');
   }
-
-  // Prefer the custom claim when present.
-  if (request.auth.token?.admin === true) return true;
-
-  // Fall back to the authoritative Firestore admin profile.
-  try {
-    const snap = await db.doc(`users/${request.auth.uid}`).get();
-    const data = snap.exists ? snap.data() : null;
-
-    if (!data || data.role !== 'admin' || data.active !== true) {
-      throw new HttpsError(
-        'permission-denied',
-        'Akun yang sedang login bukan Administrator aktif.'
-      );
-    }
-  } catch (error) {
-    if (error instanceof HttpsError) throw error;
-
-    logger.error('requireAdmin Firestore check failed', {
-      uid: request.auth.uid,
-      code: error?.code,
-      message: error?.message,
-      stack: error?.stack,
-    });
-
-    throw new HttpsError(
-      'internal',
-      'Gagal memverifikasi hak Administrator. Periksa deployment Cloud Functions dan Firestore.'
-    );
-  }
-
   return true;
 }
 
@@ -69,166 +40,68 @@ async function collectQueryRefs(query) {
   return snap.docs.map(d => d.ref);
 }
 
-exports.adminCreateEmployee = onCall(
-  { region: 'asia-southeast2', timeoutSeconds: 60, memory: '256MiB' },
-  async request => {
-    await requireAdmin(request);
-
-    const d = request.data || {};
-    for (const f of ['username', 'name', 'password', 'nik']) {
-      if (typeof d[f] !== 'string' || !d[f].trim()) {
-        throw new HttpsError('invalid-argument', `Field ${f} wajib diisi.`);
-      }
-    }
-
-    const username = String(d.username).trim().toLowerCase();
-    const name = String(d.name).trim();
-    const password = String(d.password);
-    const nik = String(d.nik).trim();
-
-    if (password.length < 6) {
-      throw new HttpsError('invalid-argument', 'Password minimal 6 karakter.');
-    }
-
-    if (!/^[a-z0-9._-]{3,40}$/.test(username)) {
-      throw new HttpsError(
-        'invalid-argument',
-        'Username hanya boleh berisi huruf, angka, titik, underscore, atau tanda minus.'
-      );
-    }
-
-    const email = authEmail(username);
-    let userRecord = null;
-
-    // Check first so we can return a clean message instead of an opaque internal error.
-    try {
-      try {
-        await auth.getUserByEmail(email);
-        throw new HttpsError(
-          'already-exists',
-          `Username "${username}" sudah memiliki akun Firebase.`
-        );
-      } catch (error) {
-        if (error instanceof HttpsError) throw error;
-        if (error?.code !== 'auth/user-not-found') throw error;
-      }
-
-      userRecord = await auth.createUser({
-        email,
-        password,
-        displayName: name,
-        disabled: false,
-      });
-    } catch (error) {
-      if (error instanceof HttpsError) throw error;
-
-      logger.error('adminCreateEmployee Auth create failed', {
-        adminUid: request.auth?.uid,
-        username,
-        email,
-        code: error?.code,
-        message: error?.message,
-        stack: error?.stack,
-      });
-
-      const code = error?.code || '';
-      if (code === 'auth/email-already-exists') {
-        throw new HttpsError(
-          'already-exists',
-          `Username "${username}" sudah memiliki akun Firebase.`
-        );
-      }
-      if (code === 'auth/invalid-email') {
-        throw new HttpsError(
-          'invalid-argument',
-          `Alamat internal untuk username "${username}" ditolak oleh Firebase Authentication: ${email}.`
-        );
-      }
-      if (code === 'auth/invalid-password' || code === 'auth/password-does-not-meet-requirements') {
-        throw new HttpsError(
-          'invalid-argument',
-          'Password tidak memenuhi persyaratan Firebase Authentication.'
-        );
-      }
-      if (code === 'auth/operation-not-allowed') {
-        throw new HttpsError(
-          'failed-precondition',
-          'Firebase Authentication Email/Password belum diaktifkan pada project ini.'
-        );
-      }
-      if (code === 'auth/insufficient-permission') {
-        throw new HttpsError(
-          'permission-denied',
-          'Cloud Functions tidak memiliki izin untuk mengelola Firebase Authentication.'
-        );
-      }
-
-      throw new HttpsError(
-        'internal',
-        `Gagal membuat akun Firebase untuk "${username}".${error?.message ? ` Detail: ${error.message}` : ''}`
-      );
-    }
-
-    const user = {
-      id: userRecord.uid,
-      role: 'employee',
-      username,
-      authEmail: email,
-      name,
-      nik,
-      department: String(d.department || '').trim(),
-      position: String(d.position || '').trim(),
-      phone: String(d.phone || '').trim(),
-      email: String(d.email || '').trim(),
-      active: true,
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      await db.doc(`users/${userRecord.uid}`).set(user);
-      await db.doc(`directory/${userRecord.uid}`).set({
-        id: userRecord.uid,
-        name: user.name,
-        nik: user.nik,
-        department: user.department,
-        position: user.position,
-        active: true,
-        role: 'employee',
-      });
-
-      logger.info('adminCreateEmployee success', {
-        adminUid: request.auth?.uid,
-        employeeUid: userRecord.uid,
-        username,
-      });
-
-      return { ok: true, uid: userRecord.uid };
-    } catch (error) {
-      logger.error('adminCreateEmployee Firestore write failed', {
-        adminUid: request.auth?.uid,
-        employeeUid: userRecord.uid,
-        username,
-        code: error?.code,
-        message: error?.message,
-        stack: error?.stack,
-      });
-
-      // Roll back the Authentication account so we never leave an orphan account.
-      await auth.deleteUser(userRecord.uid).catch(rollbackError => {
-        logger.error('adminCreateEmployee rollback failed', {
-          employeeUid: userRecord.uid,
-          code: rollbackError?.code,
-          message: rollbackError?.message,
-        });
-      });
-
-      throw new HttpsError(
-        'internal',
-        `Akun Firebase berhasil dibuat tetapi data karyawan gagal disimpan ke Firestore.${error?.message ? ` Detail: ${error.message}` : ''}`
-      );
-    }
+async function createEmployeeForAdmin(d) {
+  for (const f of ['username','name','password','nik']) {
+    if (!d[f]) throw new HttpsError('invalid-argument', `Field ${f} wajib diisi.`);
   }
-);
+  if (String(d.password).length < 6) throw new HttpsError('invalid-argument','Password minimal 6 karakter.');
+  const username = String(d.username).trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,40}$/.test(username)) {
+    throw new HttpsError('invalid-argument','Username hanya boleh berisi huruf, angka, titik, underscore, atau tanda minus.');
+  }
+  const email = authEmail(username);
+  let userRecord;
+  try {
+    userRecord = await auth.createUser({ email, password: String(d.password), displayName: String(d.name) });
+  } catch (e) {
+    if (e.code === 'auth/email-already-exists') throw new HttpsError('already-exists','Username tersebut sudah memiliki akun Firebase.');
+    throw new HttpsError('internal', e.message || 'Gagal membuat akun Firebase.');
+  }
+  const user = {
+    id:userRecord.uid, role:'employee', username, authEmail:email, name:String(d.name), nik:String(d.nik),
+    department:String(d.department||''), position:String(d.position||''), phone:String(d.phone||''),
+    email:String(d.email||''), active:true, createdAt:new Date().toISOString()
+  };
+  try {
+    await Promise.all([
+      db.doc(`users/${userRecord.uid}`).set(user),
+      db.doc(`directory/${userRecord.uid}`).set({id:userRecord.uid,name:user.name,nik:user.nik,department:user.department,position:user.position,active:true,role:'employee'})
+    ]);
+    return { uid:userRecord.uid };
+  } catch (e) {
+    await auth.deleteUser(userRecord.uid).catch(()=>{});
+    throw new HttpsError('internal', e.message || 'Gagal menyimpan profil karyawan.');
+  }
+}
+
+// HTTP endpoint used by the browser so GitHub Pages preflight/CORS is handled explicitly.
+exports.adminCreateEmployee = onRequest({ cors: true }, async (req, res) => {
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed', message: 'Gunakan POST.' });
+
+  try {
+    const authHeader = String(req.headers.authorization || '');
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'unauthenticated', message: 'Authorization Bearer token wajib dikirim.' });
+    }
+    const idToken = authHeader.slice(7).trim();
+    const decoded = await auth.verifyIdToken(idToken);
+    const fakeRequest = { auth: { uid: decoded.uid, token: decoded }, data: req.body || {} };
+    await requireAdmin(fakeRequest);
+    const result = await createEmployeeForAdmin(req.body || {});
+    return res.status(200).json(result);
+  } catch (e) {
+    const code = e instanceof HttpsError ? e.code : 'internal';
+    const message = e.message || 'Terjadi kesalahan pada server.';
+    const statusMap = {
+      'unauthenticated': 401, 'permission-denied': 403, 'invalid-argument': 400,
+      'already-exists': 409, 'failed-precondition': 412, 'not-found': 404
+    };
+    const status = statusMap[code] || 500;
+    console.error('adminCreateEmployee failed:', e);
+    return res.status(status).json({ error: code, message });
+  }
+});
 
 exports.adminSetEmployeePassword = onCall(async request => {
   await requireAdmin(request);
