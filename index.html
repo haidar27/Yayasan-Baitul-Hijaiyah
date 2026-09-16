@@ -24,7 +24,7 @@
 <script type="module">
 /* =========================================================
    ABSENSIPRO — Firebase + Cloud Firestore Realtime
-   Ganti nilai FIREBASE_CONFIG dengan konfigurasi WEB APP
+   Ganti nilai firebaseConfig dengan konfigurasi WEB APP
    dari project Firebase BARU kamu.
    ========================================================= */
 
@@ -55,11 +55,11 @@ const AUTH_DOMAIN_SUFFIX='@auth.absensipro.local';
 const DEFAULT_SETTINGS={company:'AbsensiPro Company',lat:-6.200000,lng:106.816666,radius:200,requireLocation:true,graceMinutes:10};
 const DAYS=[['1','Senin'],['2','Selasa'],['3','Rabu'],['4','Kamis'],['5','Jumat'],['6','Sabtu'],['0','Minggu']];
 
-if(!FIREBASE_CONFIG.projectId||FIREBASE_CONFIG.projectId.includes('yayasan-baitul-hijaiyah')){
-  console.warn('Firebase belum dikonfigurasi. Isi FIREBASE_CONFIG dengan konfigurasi Web App dari project Firebase baru.');
+if(!firebaseConfig.projectId||firebaseConfig.projectId.includes('GANTI_DENGAN_')){
+  console.warn('Firebase belum dikonfigurasi. Isi firebaseConfig dengan konfigurasi Web App dari project Firebase baru.');
 }
 
-const firebaseApp=getApps().length?getApp():initializeApp(FIREBASE_CONFIG);
+const firebaseApp=getApps().length?getApp():initializeApp(firebaseConfig);
 const auth=getAuth(firebaseApp);
 const dbFs=getFirestore(firebaseApp);
 const functions=getFunctions(firebaseApp,'asia-southeast2');
@@ -266,9 +266,6 @@ function bindPage(){if(session.role==='admin')bindAdmin();else bindEmployee();bi
 // Initial render + Auth observer
 render();
 restoreAuthObserver();
-</script>
-</body>
-</html>
 </script>
 </body>
 </html>
